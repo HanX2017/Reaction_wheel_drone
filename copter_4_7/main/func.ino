@@ -1,0 +1,103 @@
+void calibrateAccelerometer() {
+  int32_t sumX = 0, sumY = 0, sumZ = 0;
+
+  for (int i = 0; i < 1024; i++) {
+    Wire.beginTransmission(MPU6050);
+    Wire.write(0x3B);  // ACCEL_XOUT_H
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU6050, 6, true);
+    int16_t x = Wire.read() << 8 | Wire.read();
+    int16_t y = Wire.read() << 8 | Wire.read();
+    int16_t z = Wire.read() << 8 | Wire.read();
+
+    sumX += x;
+    sumY += y;
+    sumZ += z;
+
+    delay(3);
+  }
+
+  AcX_offset = -(sumX / 1024);
+  AcY_offset = -(sumY / 1024);
+  AcZ_offset = 16384 - (sumZ / 1024);  // 1g = 16384 @ ±2g
+
+  Serial.println("Accelerometer offsets:");
+  Serial.print("AcX_offset: "); Serial.println(AcX_offset);
+  Serial.print("AcY_offset: "); Serial.println(AcY_offset);
+  Serial.print("AcZ_offset: "); Serial.println(AcZ_offset);
+}
+void writeTo(byte device, byte address, byte value) {
+  Wire.beginTransmission(device);
+  Wire.write(address);
+  Wire.write(value);
+  Wire.endTransmission(true);
+}
+
+//setup MPU6050
+void angle_setup() {
+  Wire.begin();
+  delay (100);
+  writeTo(MPU6050, PWR_MGMT_1, 0);
+  writeTo(MPU6050, ACCEL_CONFIG, accSens << 3); // Specifying output scaling of accelerometer
+  writeTo(MPU6050, GYRO_CONFIG, gyroSens << 3); // Specifying output scaling of gyroscope
+  delay (100);
+
+  // calc Y gyro offset by averaging 1024 values
+  for (int i = 0; i < 1024; i++) {
+    angle_calc();
+    GyZ_offset_sum += GyZ;
+    delay(5);
+  }
+  GyZ_offset = GyZ_offset_sum >> 10;
+  Serial.print("GyZ offset value = "); Serial.println(GyZ_offset);
+  
+  for (int i = 0; i < 1024; i++) {
+    angle_calc();
+    GyY_offset_sum += GyY;
+    delay(5);
+  }
+  GyY_offset = GyY_offset_sum >> 10;
+  Serial.print("GyY offset value = "); Serial.println(GyY_offset);
+
+}
+
+void angle_calc() {
+  
+  Wire.beginTransmission(MPU6050);
+  Wire.write(0x43);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050, 6, true);  
+  GyX = Wire.read() << 8 | Wire.read(); // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
+  GyY = Wire.read() << 8 | Wire.read(); // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
+  GyZ = Wire.read() << 8 | Wire.read(); // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+
+  Wire.beginTransmission(MPU6050);
+  Wire.write(0x3B);                  
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050, 6, true);  
+  AcX = Wire.read() << 8 | Wire.read(); // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
+  AcY = Wire.read() << 8 | Wire.read(); // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
+  AcZ = Wire.read() << 8 | Wire.read(); // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
+
+  AcX += AcX_offset;
+  AcY += AcY_offset;  
+  AcZ += AcZ_offset;
+  GyZ -= GyZ_offset;
+  GyY -= GyY_offset;
+
+  robot_angleX += GyZ * loop_time / 1000 / 65.536; 
+  Acc_angleX = atan2(AcY, -AcX) * 57.2958;               // angle from acc. values  * 57.2958 (deg/rad)
+  robot_angleX = robot_angleX * Gyro_amount + Acc_angleX * (1.0 - Gyro_amount);
+
+  robot_angleY += GyY * loop_time / 1000 / 65.536;   
+  Acc_angleY = -atan2(AcZ, -AcX) * 57.2958;              //angle from acc. values  * 57.2958 (deg/rad)
+  robot_angleY = robot_angleY * Gyro_amount + Acc_angleY * (1.0 - Gyro_amount);
+  
+  angleX = robot_angleX - offsets.X;
+  angleY = robot_angleY - offsets.Y;
+  
+  if (abs(angleX) > 6 || abs(angleY) > 6) vertical = false;
+  if (abs(angleX) < 0.3 && abs(angleY) < 0.3) vertical = true;
+
+  //Serial.print("AngleX: "); Serial.print(angleX); Serial.print(" AngleY: "); Serial.println(angleY);
+}
